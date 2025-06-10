@@ -50,48 +50,46 @@ def _candidate_generator(queue: Queue, stop_event: multiprocessing.Event, base: 
         queue.put(n)
         n += 2
 
-def _worker_dynamic(queue: Queue, max_prime: Value, lock: Lock, stop_event: multiprocessing.Event):
-    while not stop_event.is_set():
-        try:
-            n = queue.get(timeout=0.1)
-            if is_prime(n):
-                with lock:
-                    if n > max_prime.value:
-                        max_prime.value = n
-        except Empty:
-            continue
+def worker_static(start: int, step: int, timeout: float, shared_max: Value, lock: Lock, stop_event: multiprocessing.Event):
+    t0 = time.time()
+    n = start
+    while not stop_event.is_set() and time.time() - t0 < timeout:
+        if is_prime(n):
+            with lock:
+                if n > shared_max.value:
+                    shared_max.value = n
+        n += step
+
 
 def find_max_prime_parallel(timeout: int, n_workers: int = 4) -> int:
+    """ Encontra o maior número primo possível dentro do tempo limite, utilizando múltiplos processos em paralelo."""
     if not isinstance(timeout, int) or timeout < 0:
         raise ValueError("timeout deve ser um inteiro positivo.")
     if not isinstance(n_workers, int) or n_workers < 1:
         raise ValueError("n_workers deve ser um inteiro positivo.")
 
-    queue = Queue(maxsize=1000)  # Limitar para evitar uso excessivo de memória
-    max_prime = Value('q', 2)
+    shared_max = Value('Q', 2)  # 'Q' para unsigned long long (8 bytes)
     lock = Lock()
     stop_event = multiprocessing.Event()
 
-    # Começa em números maiores conforme timeout cresce (mais dígitos)
-    start_base = 10 ** (6 + timeout // 4)
+    processes = []
+    base_start = 10**15 + 1  # ~15 dígitos e ímpar
 
-    generator = Process(target=_candidate_generator, args=(queue, stop_event, start_base))
-    generator.start()
-
-    workers = []
-    for _ in range(n_workers):
-        p = Process(target=_worker_dynamic, args=(queue, max_prime, lock, stop_event))
+    for i in range(n_workers):
+        start = base_start + i * 2  # começa em ímpares diferentes
+        step = n_workers * 2
+        p = Process(target=worker_static, args=(start, step, timeout, shared_max, lock, stop_event))
         p.start()
-        workers.append(p)
+        processes.append(p)
 
     time.sleep(timeout)
     stop_event.set()
 
-    generator.join()
-    for p in workers:
+    for p in processes:
         p.join()
 
-    return max_prime.value
+    return shared_max.value
+
 
 
 
